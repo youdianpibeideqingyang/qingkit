@@ -1,0 +1,40 @@
+name: Release
+
+# 推送 v 开头的 tag（如 v0.1.0）时，打包 macOS 通用版（Apple 芯片 + Intel）并发布到 Releases
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
+          releaseName: QingKit ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
+          releaseBody: |
+            下载 dmg，把 QingKit 拖进「应用程序」。
+            应用没有签名，第一次打开前在终端执行：
+            `xattr -dr com.apple.quarantine /Applications/QingKit.app`
+          releaseDraft: false
+          prerelease: false
+          args: --target universal-apple-darwin

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- 只在菜单栏显示，不出现在 Dock -->
+  <key>LSUIElement</key>
+  <true/>
+  <!-- 读取 Chrome / Safari 当前标签页地址时，系统会弹出这段说明 -->
+  <key>NSAppleEventsUsageDescription</key>
+  <string>QingKit 需要读取浏览器当前标签页的地址，用来生成手机可扫的二维码。</string>
+</dict>
+</plist>
