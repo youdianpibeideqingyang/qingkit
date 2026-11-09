@@ -158,7 +158,7 @@ export function JsonTree({ text, toast }: { text: string; toast: (m: string) => 
       <div className="out-head" style={{ paddingLeft: 0, borderBottom: "1px solid var(--divider)" }}>
         <label className="search">
           <IconSearch size={12} />
-          <input aria-label="搜索键或值" placeholder="搜索键或值" value={query} onChange={(e) => setQuery(e.target.value)} />
+          <input id="tree-search" aria-label="搜索键或值" placeholder="搜索键或值" value={query} onChange={(e) => setQuery(e.target.value)} />
           {search && <span style={{ fontSize: 11, color: "var(--text-3)" }}>{search.hits} 处</span>}
         </label>
         <button className="icon-btn" style={{ width: 28, height: 28 }} aria-label="全部展开" title="全部展开" onClick={() => setExpanded(collectIds(root, Infinity))}>

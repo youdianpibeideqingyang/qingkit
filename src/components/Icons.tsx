@@ -143,3 +143,21 @@ export const IconCollapseAll = (p: P) => (
     <path d="M4 7l4-4 4 4M4 13l4-4 4 4" />
   </svg>
 );
+
+export const IconClose = (p: P) => (
+  <svg {...base(p, 1.6)}>
+    <path d="M4 4l8 8M12 4l-8 8" />
+  </svg>
+);
+
+export const IconExpand = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M9.5 2.5h4v4M13.5 2.5 9 7M6.5 13.5h-4v-4M2.5 13.5 7 9" />
+  </svg>
+);
+
+export const IconShrink = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M13 7H9V3M9 7l4.5-4.5M3 9h4v4M7 9l-4.5 4.5" />
+  </svg>
+);

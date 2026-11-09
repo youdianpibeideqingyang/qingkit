@@ -63,6 +63,11 @@ export async function setPinned(pinned: boolean): Promise<void> {
   if (inTauri) await invoke("set_pinned", { pinned });
 }
 
+/** 切换大窗口 / 菜单栏面板。 */
+export async function setExpanded(expanded: boolean): Promise<void> {
+  if (inTauri) await invoke("set_expanded", { expanded });
+}
+
 export async function hidePanel(): Promise<void> {
   if (inTauri) await invoke("hide_panel");
 }

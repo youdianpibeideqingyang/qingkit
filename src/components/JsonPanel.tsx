@@ -18,8 +18,10 @@ import {
 } from "../lib/json";
 import { writeClipboardText } from "../lib/bridge";
 import { loadPref, savePref } from "../lib/useToast";
-import { IconBraces, IconCheckCircle, IconChevronDown, IconError, IconInfo, IconSearch, IconWarn } from "./Icons";
+import { IconBraces, IconCheckCircle, IconChevronDown, IconChevronRight, IconClose, IconError, IconInfo, IconSearch, IconWarn } from "./Icons";
 import { JsonTree } from "./JsonTree";
+import { CodeView } from "./CodeView";
+import { findMatches, parseGotoLine } from "../lib/search";
 
 type View = "text" | "tree";
 type Mode = "format" | "minify";
@@ -44,7 +46,8 @@ const SOURCE_LABEL: Record<string, string> = {
   jsobject: "JS 对象",
 };
 
-const HIGHLIGHT_LIMIT = 300_000;
+const HIGHLIGHT_LIMIT = 3_000_000;
+const FILE_LIMIT = 50 * 1024 * 1024;
 const DETECT_LIMIT = 2_000_000;
 
 function formatBytes(n: number): string {
@@ -53,7 +56,7 @@ function formatBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(2)} MB`;
 }
 
-export function JsonPanel({ toast }: { toast: (msg: string) => void }) {
+export function JsonPanel({ toast, expanded }: { toast: (msg: string) => void; expanded: boolean }) {
   const [input, setInput] = useState<string>(() => loadPref("json.input", ""));
   const [indent, setIndent] = useState<Indent>(() => loadPref<Indent>("json.indent", 2));
   const [view, setView] = useState<View>(() => loadPref<View>("json.view", "text"));
@@ -65,6 +68,12 @@ export function JsonPanel({ toast }: { toast: (msg: string) => void }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const convertRef = useRef<HTMLDivElement>(null);
   const indentRef = useRef<HTMLDivElement>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [caseSensitive, setCaseSensitive] = useState(false);
+  const [current, setCurrent] = useState(0);
+  const [dragOver, setDragOver] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const t = window.setTimeout(() => savePref("json.input", input.length < 1_000_000 ? input : ""), 400);
@@ -181,16 +190,68 @@ export function JsonPanel({ toast }: { toast: (msg: string) => void }) {
 
   const unsafe = useMemo(() => (output?.valid && output.text.length < HIGHLIGHT_LIMIT ? findUnsafeIntegers(output.text) : []), [output]);
   const unsafeLines = useMemo(() => new Set(unsafe.map((u) => u.line)), [unsafe]);
-  const lines = useMemo(() => (output && output.text.length < HIGHLIGHT_LIMIT ? highlightLines(output.text) : null), [output]);
+  const plainLines = useMemo(() => (output ? output.text.split("\n") : []), [output]);
+  const lines = useMemo(
+    () => (output && output.text.length < HIGHLIGHT_LIMIT ? highlightLines(output.text) : plainLines.map((l) => [{ text: l, cls: "space" as const }])),
+    [output, plainLines],
+  );
+  const gotoLine = useMemo(() => parseGotoLine(query), [query]);
+  const matches = useMemo(
+    () => (searchOpen && !gotoLine && query ? findMatches(plainLines, query, caseSensitive) : []),
+    [searchOpen, gotoLine, query, plainLines, caseSensitive],
+  );
+  useEffect(() => setCurrent(0), [matches]);
+
+  const openSearch = useCallback(() => {
+    if (view === "tree" && output?.valid) {
+      document.getElementById("tree-search")?.focus();
+      return;
+    }
+    if (!output && input.trim()) run("format");
+    setSearchOpen(true);
+    requestAnimationFrame(() => {
+      searchRef.current?.focus();
+      searchRef.current?.select();
+    });
+  }, [view, output, input, run]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() === "f" && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
+        e.preventDefault();
+        openSearch();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [openSearch]);
+
+  const step = (dir: 1 | -1) => {
+    if (matches.length === 0) return;
+    setCurrent((c) => (c + dir + matches.length) % matches.length);
+  };
+
+  const loadFile = async (file: File) => {
+    if (file.size > FILE_LIMIT) return toast(`文件太大（${formatBytes(file.size)}），最多支持 50 MB`);
+    try {
+      const text = await file.text();
+      setInput(text);
+      run("format", text);
+      toast(`已读取 ${file.name}`);
+    } catch (e) {
+      toast(`读取文件失败：${e}`);
+    }
+  };
   const bytes = useMemo(() => (output ? new TextEncoder().encode(output.text).length : 0), [output]);
   const lineCount = output ? output.text.split("\n").length : 0;
 
   const showTree = view === "tree" && output?.valid;
-  const collapsed = showTree && !inputExpanded && input.length > 0;
+  const collapsed = !expanded && showTree && !inputExpanded && input.length > 0;
   const hasIssues = !!issues && issues.list.length > 0;
 
   return (
-    <>
+    <div className={`json-layout ${expanded ? "wide" : ""}`}>
+      <div className="json-left">
       {collapsed ? (
         <button className="collapsed-input" onClick={() => setInputExpanded(true)}>
           <IconChevronDown size={11} />
@@ -213,10 +274,25 @@ export function JsonPanel({ toast }: { toast: (msg: string) => void }) {
           <textarea
             id="json-in"
             ref={textareaRef}
-            className={`json-input ${hasIssues && issues?.source === "input" ? "error" : ""}`}
+            className={`json-input ${hasIssues && issues?.source === "input" ? "error" : ""} ${dragOver ? "drag" : ""}`}
+            onDragOver={(e) => {
+              if (e.dataTransfer.types.includes("Files")) {
+                e.preventDefault();
+                setDragOver(true);
+              }
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              const file = e.dataTransfer.files[0];
+              setDragOver(false);
+              if (file) {
+                e.preventDefault();
+                loadFile(file);
+              }
+            }}
             spellCheck={false}
             autoComplete="off"
-            placeholder="粘贴 JSON、转义字符串、URL 参数、键值对、YAML 或 JS 对象，粘贴后自动格式化"
+            placeholder="粘贴或拖入文件：JSON、转义字符串、URL 参数、键值对、YAML、JS 对象，粘贴后自动格式化"
             value={input}
             onChange={(e) => {
               const v = e.target.value;
@@ -293,7 +369,9 @@ export function JsonPanel({ toast }: { toast: (msg: string) => void }) {
           </div>
         </div>
       )}
+      </div>
 
+      <div className="json-right">
       <div className="card out">
         <div className="out-head">
           <div className="seg small">
@@ -342,6 +420,11 @@ export function JsonPanel({ toast }: { toast: (msg: string) => void }) {
             )}
           </div>
           <span className="grow" />
+          {!showTree && (
+            <button className="icon-btn" style={{ width: 28, height: 28 }} aria-label="搜索（⌘F）" title="搜索（⌘F）" aria-pressed={searchOpen} onClick={() => (searchOpen ? setSearchOpen(false) : openSearch())}>
+              <IconSearch size={14} />
+            </button>
+          )}
           <button className="btn link" disabled={!output} onClick={() => output && (setInput(output.text), toast("已替换输入"))}>
             替换输入
           </button>
@@ -367,28 +450,53 @@ export function JsonPanel({ toast }: { toast: (msg: string) => void }) {
           <JsonTree text={output.text} toast={toast} />
         ) : (
           <>
-            <div className="code">
-              {lines ? (
-                lines.map((tokens, idx) => (
-                  <div className={`ln ${unsafeLines.has(idx + 1) ? "flag" : ""}`} key={idx}>
-                    <span className="num">{idx + 1}</span>
-                    <span>
-                      {tokens.map((t, j) =>
-                        t.cls === "space" || t.cls === "punct" ? (
-                          <span key={j}>{t.text}</span>
-                        ) : (
-                          <span key={j} className={`t-${t.cls}`}>
-                            {t.text}
-                          </span>
-                        ),
-                      )}
-                    </span>
-                  </div>
-                ))
-              ) : (
-                <div className="plain">{output.text}</div>
-              )}
-            </div>
+            {searchOpen && (
+              <div className="find-bar">
+                <label className="search">
+                  <IconSearch size={12} />
+                  <input
+                    ref={searchRef}
+                    aria-label="在结果中搜索"
+                    placeholder="搜索内容，或输入 :行号 跳转"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        step(e.shiftKey ? -1 : 1);
+                      } else if (e.key === "Escape") {
+                        e.preventDefault();
+                        setSearchOpen(false);
+                      }
+                    }}
+                  />
+                  <span className="count">
+                    {gotoLine
+                      ? gotoLine > lineCount
+                        ? `共 ${lineCount} 行`
+                        : `第 ${gotoLine} 行`
+                      : query
+                        ? matches.length
+                          ? `${current + 1}/${matches.length}${matches.length >= 10000 ? "+" : ""}`
+                          : "无结果"
+                        : ""}
+                  </span>
+                </label>
+                <button className={`icon-btn case ${caseSensitive ? "on" : ""}`} aria-pressed={caseSensitive} aria-label="区分大小写" title="区分大小写" onClick={() => setCaseSensitive((v) => !v)}>
+                  Aa
+                </button>
+                <button className="icon-btn" aria-label="上一个（⇧↵）" title="上一个（⇧↵）" disabled={!matches.length} onClick={() => step(-1)}>
+                  <IconChevronRight size={12} style={{ transform: "rotate(-90deg)" }} />
+                </button>
+                <button className="icon-btn" aria-label="下一个（↵）" title="下一个（↵）" disabled={!matches.length} onClick={() => step(1)}>
+                  <IconChevronRight size={12} style={{ transform: "rotate(90deg)" }} />
+                </button>
+                <button className="icon-btn" aria-label="关闭搜索" title="关闭（Esc）" onClick={() => setSearchOpen(false)}>
+                  <IconClose size={12} />
+                </button>
+              </div>
+            )}
+            <CodeView lines={lines} matches={matches} current={matches.length ? current : -1} flagLines={unsafeLines} gotoLine={gotoLine} />
             <div className="out-foot">
               <div className={`status ${output.valid ? "ok" : "muted"}`} style={{ fontSize: 11.5 }}>
                 {output.valid ? <IconCheckCircle size={13} /> : <IconInfo size={13} />}
@@ -406,6 +514,7 @@ export function JsonPanel({ toast }: { toast: (msg: string) => void }) {
           </>
         )}
       </div>
-    </>
+      </div>
+    </div>
   );
 }
