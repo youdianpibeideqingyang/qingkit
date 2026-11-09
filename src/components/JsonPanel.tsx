@@ -56,7 +56,19 @@ function formatBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(2)} MB`;
 }
 
-export function JsonPanel({ toast, expanded }: { toast: (msg: string) => void; expanded: boolean }) {
+/** 结果超过这个行数或大小时，自动切到大窗口 */
+const AUTO_EXPAND_LINES = 300;
+const AUTO_EXPAND_BYTES = 30 * 1024;
+
+export function JsonPanel({
+  toast,
+  expanded,
+  onAutoExpand,
+}: {
+  toast: (msg: string) => void;
+  expanded: boolean;
+  onAutoExpand: () => void;
+}) {
   const [input, setInput] = useState<string>(() => loadPref("json.input", ""));
   const [indent, setIndent] = useState<Indent>(() => loadPref<Indent>("json.indent", 2));
   const [view, setView] = useState<View>(() => loadPref<View>("json.view", "text"));
@@ -243,7 +255,19 @@ export function JsonPanel({ toast, expanded }: { toast: (msg: string) => void; e
     }
   };
   const bytes = useMemo(() => (output ? new TextEncoder().encode(output.text).length : 0), [output]);
-  const lineCount = output ? output.text.split("\n").length : 0;
+  const lineCount = plainLines.length;
+
+  // 结果较大时自动切到大窗口；同一份结果只自动展开一次，收回后不再弹
+  const [autoExpand, setAutoExpand] = useState<boolean>(() => loadPref("json.autoExpand", true));
+  useEffect(() => savePref("json.autoExpand", autoExpand), [autoExpand]);
+  const autoExpandedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!output || expanded || !autoExpand) return;
+    if (lineCount <= AUTO_EXPAND_LINES && bytes <= AUTO_EXPAND_BYTES) return;
+    if (autoExpandedFor.current === output.text) return;
+    autoExpandedFor.current = output.text;
+    onAutoExpand();
+  }, [output, expanded, autoExpand, lineCount, bytes, onAutoExpand]);
 
   const showTree = view === "tree" && output?.valid;
   const collapsed = !expanded && showTree && !inputExpanded && input.length > 0;
@@ -498,9 +522,17 @@ export function JsonPanel({ toast, expanded }: { toast: (msg: string) => void; e
             )}
             <CodeView lines={lines} matches={matches} current={matches.length ? current : -1} flagLines={unsafeLines} gotoLine={gotoLine} />
             <div className="out-foot">
-              <div className={`status ${output.valid ? "ok" : "muted"}`} style={{ fontSize: 11.5 }}>
-                {output.valid ? <IconCheckCircle size={13} /> : <IconInfo size={13} />}
-                {[output.valid ? "有效 JSON" : null, ...output.notes, `${lineCount} 行`, formatBytes(bytes)].filter(Boolean).join(" · ")}
+              <div className="row-between">
+                <div className={`status ${output.valid ? "ok" : "muted"}`} style={{ fontSize: 11.5 }}>
+                  {output.valid ? <IconCheckCircle size={13} /> : <IconInfo size={13} />}
+                  {[output.valid ? "有效 JSON" : null, ...output.notes, `${lineCount} 行`, formatBytes(bytes)].filter(Boolean).join(" · ")}
+                </div>
+                {expanded && (
+                  <label className="auto-expand" title={`结果超过 ${AUTO_EXPAND_LINES} 行或 30 KB 时自动切到大窗口`}>
+                    <input type="checkbox" checked={autoExpand} onChange={(e) => setAutoExpand(e.target.checked)} />
+                    大文件自动用大窗口
+                  </label>
+                )}
               </div>
               {unsafe.length > 0 && (
                 <div className="status warn" style={{ fontSize: 11.5 }}>

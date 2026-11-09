@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, LogicalSize, Manager, Size, WebviewWindow, WindowEvent};
+use tauri::{AppHandle, LogicalSize, Manager, PhysicalPosition, PhysicalSize, Position as WinPosition, Size, WebviewWindow, WindowEvent};
 use tauri_plugin_positioner::{Position, WindowExt};
 
 /// 面板状态：是否固定（固定后失焦不收起），以及上一次因失焦被收起的时间。
@@ -17,6 +17,8 @@ struct PanelState {
     /// 大窗口模式：可拖动、可缩放，失焦不收起
     expanded: AtomicBool,
     last_blur_hide: Mutex<Option<Instant>>,
+    /// 面板最近一次在菜单栏图标下方弹出的位置，收回大窗口时回到这里
+    panel_pos: Mutex<Option<PhysicalPosition<i32>>>,
 }
 
 #[tauri::command]
@@ -27,22 +29,67 @@ fn set_pinned(state: tauri::State<PanelState>, pinned: bool) {
 const PANEL_SIZE: (f64, f64) = (440.0, 760.0);
 const EXPANDED_SIZE: (f64, f64) = (1200.0, 820.0);
 
+/// 在可用区域（去掉菜单栏和 Dock）内居中放一个窗口；屏幕太小时缩到可用区域的 92%。
+/// 全部用物理像素计算。
+pub fn centered_rect(area_pos: (i32, i32), area_size: (u32, u32), want: (u32, u32)) -> ((i32, i32), (u32, u32)) {
+    let max_w = (area_size.0 as f64 * 0.92) as u32;
+    let max_h = (area_size.1 as f64 * 0.92) as u32;
+    let w = want.0.min(max_w);
+    let h = want.1.min(max_h);
+    let x = area_pos.0 + ((area_size.0 - w) / 2) as i32;
+    let y = area_pos.1 + ((area_size.1 - h) / 2) as i32;
+    ((x, y), (w, h))
+}
+
+fn remember_panel_pos(window: &WebviewWindow) {
+    if let Ok(pos) = window.outer_position() {
+        if let Ok(mut p) = window.state::<PanelState>().panel_pos.lock() {
+            *p = Some(pos);
+        }
+    }
+}
+
+fn place_at_tray(window: &WebviewWindow) {
+    if window.move_window(Position::TrayCenter).is_ok() {
+        remember_panel_pos(window);
+    }
+}
+
 #[tauri::command]
 fn set_expanded(window: WebviewWindow, state: tauri::State<PanelState>, expanded: bool) -> Result<(), String> {
-    state.expanded.store(expanded, Ordering::Relaxed);
+    let was_expanded = state.expanded.swap(expanded, Ordering::Relaxed);
     let e = |r: tauri::Result<()>| r.map_err(|e| e.to_string());
     if expanded {
+        if !was_expanded {
+            remember_panel_pos(&window);
+        }
         e(window.set_always_on_top(false))?;
         e(window.set_resizable(true))?;
         e(window.set_min_size(Some(Size::Logical(LogicalSize::new(760.0, 560.0)))))?;
-        e(window.set_size(Size::Logical(LogicalSize::new(EXPANDED_SIZE.0, EXPANDED_SIZE.1))))?;
-        e(window.center())?;
+        // 在面板所在的屏幕上居中（多屏时不会跑到别的屏幕）
+        let monitor = window.current_monitor().ok().flatten().or_else(|| window.primary_monitor().ok().flatten());
+        if let Some(m) = monitor {
+            let scale = m.scale_factor();
+            let area = m.work_area();
+            let want = ((EXPANDED_SIZE.0 * scale) as u32, (EXPANDED_SIZE.1 * scale) as u32);
+            let ((x, y), (w, h)) = centered_rect((area.position.x, area.position.y), (area.size.width, area.size.height), want);
+            e(window.set_size(Size::Physical(PhysicalSize::new(w, h))))?;
+            e(window.set_position(WinPosition::Physical(PhysicalPosition::new(x, y))))?;
+        } else {
+            e(window.set_size(Size::Logical(LogicalSize::new(EXPANDED_SIZE.0, EXPANDED_SIZE.1))))?;
+            e(window.center())?;
+        }
     } else {
         e(window.set_min_size(None::<Size>))?;
         e(window.set_size(Size::Logical(LogicalSize::new(PANEL_SIZE.0, PANEL_SIZE.1))))?;
         e(window.set_resizable(false))?;
         e(window.set_always_on_top(true))?;
-        let _ = window.move_window(Position::TrayCenter);
+        // 回到当初从菜单栏图标弹出的位置；没有记录时按图标位置重新计算
+        let saved = state.panel_pos.lock().ok().and_then(|p| *p);
+        match saved {
+            Some(pos) => e(window.set_position(WinPosition::Physical(pos)))?,
+            None => place_at_tray(&window),
+        }
     }
     let _ = window.set_focus();
     Ok(())
@@ -61,7 +108,7 @@ fn quit_app(app: AppHandle) {
 fn show_panel(window: &WebviewWindow) {
     let expanded = window.state::<PanelState>().expanded.load(Ordering::Relaxed);
     if !expanded {
-        let _ = window.move_window(Position::TrayCenter);
+        place_at_tray(window);
     }
     let _ = window.show();
     let _ = window.set_focus();
@@ -106,6 +153,7 @@ pub fn run() {
             pinned: AtomicBool::new(false),
             expanded: AtomicBool::new(false),
             last_blur_hide: Mutex::new(None),
+            panel_pos: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             set_pinned,
@@ -171,4 +219,24 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("QingKit 启动失败");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::centered_rect;
+
+    #[test]
+    fn centers_in_work_area() {
+        // 2880x1800 的 Retina 屏，去掉菜单栏后可用区域从 y=74 开始
+        let ((x, y), (w, h)) = centered_rect((0, 74), (2880, 1726), (2400, 1640));
+        assert_eq!((w, h), (2400, 1587)); // 高度被限制在可用区域的 92%
+        assert_eq!(x, 240);
+        assert_eq!(y, 74 + (1726 - 1587) / 2);
+    }
+
+    #[test]
+    fn second_monitor_offset() {
+        let ((x, y), _) = centered_rect((2880, 0), (1920, 1055), (1200, 820));
+        assert_eq!((x, y), (2880 + 360, 117));
+    }
 }

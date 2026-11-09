@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { hidePanel, inTauri, quitApp, setExpanded as setWindowExpanded, setPinned } from "./lib/bridge";
 import { loadPref, savePref, useToast } from "./lib/useToast";
 import { IconBraces, IconCheck, IconExpand, IconPin, IconPower, IconQr, IconShrink } from "./components/Icons";
@@ -25,6 +25,15 @@ export default function App() {
     setExpanded(next);
     setWindowExpanded(next);
   };
+
+  const expandedRef = useRef(expanded);
+  expandedRef.current = expanded;
+  const autoExpand = useCallback(() => {
+    if (expandedRef.current) return;
+    setExpanded(true);
+    setWindowExpanded(true);
+    show("内容较多，已切到大窗口（⌘E 收回）");
+  }, [show]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -89,7 +98,7 @@ export default function App() {
             <QrPanel toast={show} />
           </div>
         ) : (
-          <JsonPanel toast={show} expanded={expanded} />
+          <JsonPanel toast={show} expanded={expanded} onAutoExpand={autoExpand} />
         )}
       </div>
 
