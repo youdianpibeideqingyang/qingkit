@@ -18,7 +18,7 @@ import {
 } from "../lib/json";
 import { writeClipboardText } from "../lib/bridge";
 import { loadPref, savePref } from "../lib/useToast";
-import { IconBraces, IconCheckCircle, IconChevronDown, IconChevronRight, IconClose, IconError, IconInfo, IconSearch, IconWarn } from "./Icons";
+import { IconBraces, IconCheckCircle, IconChevronDown, IconChevronRight, IconClose, IconError, IconTrash, IconInfo, IconSearch, IconWarn } from "./Icons";
 import { JsonTree } from "./JsonTree";
 import { CodeView } from "./CodeView";
 import { findMatches, parseGotoLine } from "../lib/search";
@@ -86,6 +86,7 @@ export function JsonPanel({
   const [current, setCurrent] = useState(0);
   const [dragOver, setDragOver] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
+  const lastCleared = useRef<string | null>(null);
 
   useEffect(() => {
     const t = window.setTimeout(() => savePref("json.input", input.length < 1_000_000 ? input : ""), 400);
@@ -233,10 +234,38 @@ export function JsonPanel({
         e.preventDefault();
         openSearch();
       }
+      // 清空后输入框还是空的，⌘Z 恢复
+      if (e.key.toLowerCase() === "z" && (e.metaKey || e.ctrlKey) && !e.shiftKey && !input && lastCleared.current !== null) {
+        e.preventDefault();
+        undoClear();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [openSearch]);
+  });
+
+  const clearAll = () => {
+    if (!input && !output) return;
+    lastCleared.current = input;
+    setInput("");
+    setOutput(null);
+    setIssues(null);
+    setSearchOpen(false);
+    setQuery("");
+    setInputExpanded(false);
+    toast("已清空（⌘Z 撤销）");
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  };
+
+  const undoClear = () => {
+    if (lastCleared.current === null) return false;
+    const prev = lastCleared.current;
+    lastCleared.current = null;
+    setInput(prev);
+    run("format", prev);
+    toast("已恢复");
+    return true;
+  };
 
   const step = (dir: 1 | -1) => {
     if (matches.length === 0) return;
@@ -285,9 +314,15 @@ export function JsonPanel({
       ) : (
         <>
           <div className="row-between">
-            <label htmlFor="json-in" className="label">
-              输入
-            </label>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <label htmlFor="json-in" className="label">
+                输入
+              </label>
+              <button className="btn link clear-btn" onClick={clearAll} disabled={!input && !output} title="清空输入和结果（⌘Z 撤销）">
+                <IconTrash size={12} />
+                清空
+              </button>
+            </div>
             {detection && detection.kind !== "empty" && (
               <span className={`detect ${detection.kind === "unknown" || detection.kind === "invalid-json" ? "neutral" : ""}`}>
                 <IconSearch size={12} />

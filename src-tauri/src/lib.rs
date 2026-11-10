@@ -1,3 +1,4 @@
+mod animate;
 mod browser;
 mod net;
 mod ports;
@@ -19,6 +20,9 @@ struct PanelState {
     last_blur_hide: Mutex<Option<Instant>>,
     /// 面板最近一次在菜单栏图标下方弹出的位置，收回大窗口时回到这里
     panel_pos: Mutex<Option<PhysicalPosition<i32>>>,
+    /// 同上，macOS 动画用的 AppKit 坐标
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    panel_frame: Mutex<Option<animate::Frame>>,
 }
 
 #[tauri::command]
@@ -55,18 +59,50 @@ fn place_at_tray(window: &WebviewWindow) {
     }
 }
 
-#[tauri::command]
-fn set_expanded(window: WebviewWindow, state: tauri::State<PanelState>, expanded: bool) -> Result<(), String> {
-    let was_expanded = state.expanded.swap(expanded, Ordering::Relaxed);
+/// macOS：在主线程上做缩放动画，等动画结束再返回。返回 false 表示没做成，走普通方式。
+#[cfg(target_os = "macos")]
+async fn animate_mac(window: &WebviewWindow, expand: bool) -> bool {
+    let Ok(ptr) = window.ns_window() else { return false };
+    let ptr = ptr as usize;
+    let app = window.app_handle().clone();
+    let (tx, rx) = std::sync::mpsc::channel::<bool>();
+    let posted = window.run_on_main_thread(move || {
+        let state = app.state::<PanelState>();
+        let ok = if expand {
+            let current = animate::mac::current_frame(ptr);
+            if let Ok(mut f) = state.panel_frame.lock() {
+                *f = Some(current);
+            }
+            match animate::mac::visible_frame(ptr) {
+                Some(visible) => {
+                    animate::mac::animate_to(ptr, animate::centered_frame(visible, EXPANDED_SIZE));
+                    true
+                }
+                None => false,
+            }
+        } else {
+            match state.panel_frame.lock().ok().and_then(|f| *f) {
+                Some(frame) => {
+                    animate::mac::animate_to(ptr, frame);
+                    true
+                }
+                None => false,
+            }
+        };
+        let _ = tx.send(ok);
+    });
+    if posted.is_err() {
+        return false;
+    }
+    tauri::async_runtime::spawn_blocking(move || rx.recv_timeout(Duration::from_secs(3)).unwrap_or(false))
+        .await
+        .unwrap_or(false)
+}
+
+/// 普通方式：直接改大小和位置（非 macOS，或动画失败时）
+fn resize_plain(window: &WebviewWindow, expand: bool) -> Result<(), String> {
     let e = |r: tauri::Result<()>| r.map_err(|e| e.to_string());
-    if expanded {
-        if !was_expanded {
-            remember_panel_pos(&window);
-        }
-        e(window.set_always_on_top(false))?;
-        e(window.set_resizable(true))?;
-        e(window.set_min_size(Some(Size::Logical(LogicalSize::new(760.0, 560.0)))))?;
-        // 在面板所在的屏幕上居中（多屏时不会跑到别的屏幕）
+    if expand {
         let monitor = window.current_monitor().ok().flatten().or_else(|| window.primary_monitor().ok().flatten());
         if let Some(m) = monitor {
             let scale = m.scale_factor();
@@ -80,16 +116,46 @@ fn set_expanded(window: WebviewWindow, state: tauri::State<PanelState>, expanded
             e(window.center())?;
         }
     } else {
-        e(window.set_min_size(None::<Size>))?;
         e(window.set_size(Size::Logical(LogicalSize::new(PANEL_SIZE.0, PANEL_SIZE.1))))?;
-        e(window.set_resizable(false))?;
-        e(window.set_always_on_top(true))?;
-        // 回到当初从菜单栏图标弹出的位置；没有记录时按图标位置重新计算
-        let saved = state.panel_pos.lock().ok().and_then(|p| *p);
+        let saved = window.state::<PanelState>().panel_pos.lock().ok().and_then(|p| *p);
         match saved {
             Some(pos) => e(window.set_position(WinPosition::Physical(pos)))?,
-            None => place_at_tray(&window),
+            None => place_at_tray(window),
         }
+    }
+    Ok(())
+}
+
+/// 切换大窗口 / 菜单栏面板。带动画，动画结束后才返回，前端据此切换布局。
+#[tauri::command]
+async fn set_expanded(window: WebviewWindow, expanded: bool) -> Result<(), String> {
+    let was_expanded = window.state::<PanelState>().expanded.swap(expanded, Ordering::Relaxed);
+    if was_expanded == expanded {
+        return Ok(());
+    }
+    let e = |r: tauri::Result<()>| r.map_err(|e| e.to_string());
+    if expanded {
+        remember_panel_pos(&window);
+        e(window.set_always_on_top(false))?;
+        e(window.set_resizable(true))?;
+    } else {
+        // 先去掉最小尺寸限制，否则缩小动画会被卡住
+        e(window.set_min_size(None::<Size>))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    let animated = animate_mac(&window, expanded).await;
+    #[cfg(not(target_os = "macos"))]
+    let animated = false;
+    if !animated {
+        resize_plain(&window, expanded)?;
+    }
+
+    if expanded {
+        e(window.set_min_size(Some(Size::Logical(LogicalSize::new(760.0, 560.0)))))?;
+    } else {
+        e(window.set_resizable(false))?;
+        e(window.set_always_on_top(true))?;
     }
     let _ = window.set_focus();
     Ok(())
@@ -154,6 +220,7 @@ pub fn run() {
             expanded: AtomicBool::new(false),
             last_blur_hide: Mutex::new(None),
             panel_pos: Mutex::new(None),
+            panel_frame: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             set_pinned,

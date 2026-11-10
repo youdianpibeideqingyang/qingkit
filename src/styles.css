@@ -1175,3 +1175,30 @@ mark {
   margin: 0;
   accent-color: var(--accent);
 }
+
+/* 大小窗口切换：内容淡出淡入，窗口本身由系统做缩放动画 */
+.panel > * {
+  transition: opacity 0.12s ease;
+}
+
+.panel.morphing > * {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel > * {
+    transition: none;
+  }
+}
+
+.btn.link.clear-btn {
+  height: 22px;
+  padding: 0 6px;
+  gap: 3px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.btn.link.clear-btn:hover:not(:disabled) {
+  color: var(--err);
+}

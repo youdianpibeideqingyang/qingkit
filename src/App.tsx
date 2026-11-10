@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { hidePanel, inTauri, quitApp, setExpanded as setWindowExpanded, setPinned } from "./lib/bridge";
+import { hidePanel, inTauri, setExpanded as setWindowExpanded, setPinned } from "./lib/bridge";
 import { loadPref, savePref, useToast } from "./lib/useToast";
-import { IconBraces, IconCheck, IconExpand, IconPin, IconPower, IconQr, IconShrink } from "./components/Icons";
+import { IconBraces, IconCheck, IconExpand, IconHide, IconPin, IconQr, IconShrink } from "./components/Icons";
 import { QrPanel } from "./components/QrPanel";
 import { JsonPanel } from "./components/JsonPanel";
 
 type Tab = "qr" | "json";
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export default function App() {
   const [tab, setTab] = useState<Tab>(() => loadPref<Tab>("tab", "qr"));
@@ -20,20 +22,34 @@ export default function App() {
     setPinned(pinned);
   }, [pinned]);
 
-  const toggleExpanded = () => {
-    const next = !expanded;
-    setExpanded(next);
-    setWindowExpanded(next);
-  };
-
+  // 切换大小窗口：内容先淡出 → 窗口平滑缩放 → 换布局 → 内容淡入
+  const [morphing, setMorphing] = useState(false);
+  const busy = useRef(false);
   const expandedRef = useRef(expanded);
   expandedRef.current = expanded;
+
+  const switchSize = useCallback(async (next: boolean) => {
+    if (busy.current || expandedRef.current === next) return;
+    busy.current = true;
+    setMorphing(true);
+    await sleep(120);
+    try {
+      await setWindowExpanded(next);
+    } catch (e) {
+      console.warn("切换窗口大小失败", e);
+    }
+    setExpanded(next);
+    await sleep(30);
+    setMorphing(false);
+    busy.current = false;
+  }, []);
+
+  const toggleExpanded = () => switchSize(!expandedRef.current);
+
   const autoExpand = useCallback(() => {
     if (expandedRef.current) return;
-    setExpanded(true);
-    setWindowExpanded(true);
-    show("内容较多，已切到大窗口（⌘E 收回）");
-  }, [show]);
+    switchSize(true).then(() => show("内容较多，已切到大窗口（⌘E 收回）"));
+  }, [show, switchSize]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -53,7 +69,7 @@ export default function App() {
   });
 
   return (
-    <div className={`panel ${expanded ? "expanded" : ""}`}>
+    <div className={`panel ${expanded ? "expanded" : ""} ${morphing ? "morphing" : ""}`}>
       <div className="header" data-tauri-drag-region={expanded ? "" : undefined}>
         <div className="seg" role="tablist">
           <button role="tab" aria-pressed={tab === "qr"} aria-selected={tab === "qr"} onClick={() => setTab("qr")} title="⌘1">
@@ -86,8 +102,8 @@ export default function App() {
           >
             {expanded ? <IconShrink /> : <IconExpand />}
           </button>
-          <button className="icon-btn" aria-label="退出 QingKit" title="退出 QingKit" onClick={() => quitApp()}>
-            <IconPower />
+          <button className="icon-btn" aria-label="收起到后台" title="收起到后台（点菜单栏图标再打开；退出请右键菜单栏图标）" onClick={() => hidePanel()}>
+            <IconHide />
           </button>
         </div>
       </div>

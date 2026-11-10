@@ -161,3 +161,15 @@ export const IconShrink = (p: P) => (
     <path d="M13 7H9V3M9 7l4.5-4.5M3 9h4v4M7 9l-4.5 4.5" />
   </svg>
 );
+
+export const IconHide = (p: P) => (
+  <svg {...base(p, 1.5)}>
+    <path d="M3 2.8h10M8 13.5V6M5 9l3-3 3 3" />
+  </svg>
+);
+
+export const IconTrash = (p: P) => (
+  <svg {...base(p, 1.4)}>
+    <path d="M2.5 4.2h11M6.2 4.2V2.8h3.6v1.4M4 4.2l.7 9.3h6.6l.7-9.3M6.6 6.8v4.4M9.4 6.8v4.4" />
+  </svg>
+);
