@@ -1,9 +1,26 @@
 import { memo, useMemo, useState, type ReactNode } from "react";
 import { buildTree, nodeValueText, toJsonPath, toJsPath, type TreeNode } from "../lib/json";
 import { writeClipboardText } from "../lib/bridge";
-import { IconChevronDown, IconChevronRight, IconCollapseAll, IconExpandAll, IconSearch } from "./Icons";
+import { Segmented } from "./Segmented";
+import { detectTimestamp, formatInZone, localZone } from "../lib/time";
+import { IconChevronDown, IconCollapseAll, IconExpandAll, IconSearch } from "./Icons";
 
 type PathStyle = "jsonpath" | "js";
+
+const LOCAL_TZ = localZone();
+const TS_MIN = Date.UTC(2000, 0, 1);
+const TS_MAX = Date.UTC(2100, 0, 1);
+
+/** 数字或纯数字字符串看起来像 2000–2100 年间的秒/毫秒时间戳时，给出本地时间提示。 */
+function tsHint(node: TreeNode): string | null {
+  if (node.type !== "number" && node.type !== "string") return null;
+  const raw = node.type === "string" ? node.raw.slice(1, -1) : node.raw;
+  if (!/^\d{10}$|^\d{13}$/.test(raw)) return null;
+  const p = detectTimestamp(raw);
+  if (!p || p.ms < TS_MIN || p.ms > TS_MAX) return null;
+  const f = formatInZone(p.ms, LOCAL_TZ);
+  return `${f.date} ${f.time.slice(0, 8)}`;
+}
 
 function highlight(text: string, q: string): ReactNode {
   if (!q) return text;
@@ -84,7 +101,7 @@ const Row = memo(function Row({ node, depth, expanded, visible, query, selectedI
               onToggle(node.id);
             }}
           >
-            {isOpen ? <IconChevronDown /> : <IconChevronRight />}
+            <IconChevronDown className={`caret-icon ${isOpen ? "" : "closed"}`} />
           </button>
         ) : (
           <span className="caret-space" />
@@ -97,6 +114,7 @@ const Row = memo(function Row({ node, depth, expanded, visible, query, selectedI
           <span className={`v ${valueClass}`}>{highlight(node.raw, query)}</span>
         )}
         {node.unsafe && <span className="big">大整数</span>}
+        {tsHint(node) && <span className="ts-hint" title="看起来像时间戳，按本地时间显示">{tsHint(node)}</span>}
       </div>
       {hasChildren &&
         isOpen &&
@@ -184,14 +202,16 @@ export function JsonTree({ text, toast }: { text: string; toast: (m: string) => 
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontSize: 11.5, color: "var(--text-3)" }}>路径</span>
           <code>{selected ? pathOf(selected) : "点任意节点复制路径"}</code>
-          <div className="seg small">
-            <button aria-pressed={pathStyle === "jsonpath"} onClick={() => setPathStyle("jsonpath")}>
-              JSONPath
-            </button>
-            <button aria-pressed={pathStyle === "js"} onClick={() => setPathStyle("js")}>
-              JS
-            </button>
-          </div>
+          <Segmented
+            small
+            ariaLabel="路径格式"
+            value={pathStyle}
+            options={[
+              { value: "jsonpath", label: "JSONPath" },
+              { value: "js", label: "JS" },
+            ]}
+            onChange={setPathStyle}
+          />
         </div>
         <div className="grid-2">
           <button

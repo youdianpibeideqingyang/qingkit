@@ -1,11 +1,19 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { hidePanel, inTauri, setExpanded as setWindowExpanded, setPinned } from "./lib/bridge";
 import { loadPref, savePref, useToast } from "./lib/useToast";
-import { IconBraces, IconCheck, IconExpand, IconHide, IconPin, IconQr, IconShrink } from "./components/Icons";
+import { IconBraces, IconCheck, IconClock, IconExpand, IconHide, IconPin, IconQr, IconShrink } from "./components/Icons";
+import { TimePanel } from "./components/TimePanel";
+import { Segmented } from "./components/Segmented";
 import { QrPanel } from "./components/QrPanel";
 import { JsonPanel } from "./components/JsonPanel";
 
-type Tab = "qr" | "json";
+type Tab = "qr" | "json" | "time";
+
+const TABS: { value: Tab; label: ReactNode; title: string }[] = [
+  { value: "qr", label: <><IconQr size={14} />二维码</>, title: "⌘1" },
+  { value: "json", label: <><IconBraces size={14} />JSON</>, title: "⌘2" },
+  { value: "time", label: <><IconClock size={14} />时间</>, title: "⌘3" },
+];
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -14,7 +22,7 @@ export default function App() {
   const [pinned, setPinnedState] = useState(false);
   // 浏览器里调样式时，宽度够大就当作大窗口
   const [expanded, setExpanded] = useState(() => !inTauri && window.innerWidth >= 760);
-  const { message, show } = useToast();
+  const { message, leaving, show } = useToast();
 
   useEffect(() => savePref("tab", tab), [tab]);
 
@@ -55,9 +63,9 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented) return;
       if (e.key === "Escape" && !pinned && !expanded) hidePanel();
-      if (e.metaKey && (e.key === "1" || e.key === "2")) {
+      if (e.metaKey && (e.key === "1" || e.key === "2" || e.key === "3")) {
         e.preventDefault();
-        setTab(e.key === "1" ? "qr" : "json");
+        setTab(TABS[Number(e.key) - 1].value);
       }
       if (e.metaKey && e.key.toLowerCase() === "e") {
         e.preventDefault();
@@ -71,16 +79,7 @@ export default function App() {
   return (
     <div className={`panel ${expanded ? "expanded" : ""} ${morphing ? "morphing" : ""}`}>
       <div className="header" data-tauri-drag-region={expanded ? "" : undefined}>
-        <div className="seg" role="tablist">
-          <button role="tab" aria-pressed={tab === "qr"} aria-selected={tab === "qr"} onClick={() => setTab("qr")} title="⌘1">
-            <IconQr size={14} />
-            二维码
-          </button>
-          <button role="tab" aria-pressed={tab === "json"} aria-selected={tab === "json"} onClick={() => setTab("json")} title="⌘2">
-            <IconBraces size={14} />
-            JSON
-          </button>
-        </div>
+        <Segmented options={TABS} value={tab} onChange={setTab} tabs ariaLabel="功能" />
         <div className="drag-space" data-tauri-drag-region={expanded ? "" : undefined} />
         <div style={{ display: "flex", gap: 4 }}>
           {!expanded && (
@@ -108,18 +107,21 @@ export default function App() {
         </div>
       </div>
 
-      <div className={`tab-body ${tab}`}>
-        {tab === "qr" ? (
-          <div className={`qr-layout ${expanded ? "wide" : ""}`}>
-            <QrPanel toast={show} />
-          </div>
-        ) : (
-          <JsonPanel toast={show} expanded={expanded} onAutoExpand={autoExpand} />
-        )}
+      {/* 三个页签都保持挂载，切换时不丢状态；显示时淡入 */}
+      <div className={`tab-body qr ${tab === "qr" ? "active" : ""}`} hidden={tab !== "qr"}>
+        <div className={`qr-layout ${expanded ? "wide" : ""}`}>
+          <QrPanel toast={show} />
+        </div>
+      </div>
+      <div className={`tab-body json ${tab === "json" ? "active" : ""}`} hidden={tab !== "json"}>
+        <JsonPanel toast={show} expanded={expanded} onAutoExpand={autoExpand} active={tab === "json"} />
+      </div>
+      <div className={`tab-body time ${tab === "time" ? "active" : ""}`} hidden={tab !== "time"}>
+        <TimePanel toast={show} expanded={expanded} />
       </div>
 
       {message && (
-        <div className="toast" role="status">
+        <div className={`toast ${leaving ? "leaving" : ""}`} role="status">
           <IconCheck size={12} />
           {message}
         </div>

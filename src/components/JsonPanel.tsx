@@ -21,6 +21,7 @@ import { loadPref, savePref } from "../lib/useToast";
 import { IconBraces, IconCheckCircle, IconChevronDown, IconChevronRight, IconClose, IconError, IconTrash, IconInfo, IconSearch, IconWarn } from "./Icons";
 import { JsonTree } from "./JsonTree";
 import { CodeView } from "./CodeView";
+import { Segmented } from "./Segmented";
 import { findMatches, parseGotoLine } from "../lib/search";
 
 type View = "text" | "tree";
@@ -46,6 +47,11 @@ const SOURCE_LABEL: Record<string, string> = {
   jsobject: "JS 对象",
 };
 
+const VIEW_OPTIONS: { value: View; label: string }[] = [
+  { value: "text", label: "文本" },
+  { value: "tree", label: "树形" },
+];
+
 const HIGHLIGHT_LIMIT = 3_000_000;
 const FILE_LIMIT = 50 * 1024 * 1024;
 const DETECT_LIMIT = 2_000_000;
@@ -64,10 +70,12 @@ export function JsonPanel({
   toast,
   expanded,
   onAutoExpand,
+  active,
 }: {
   toast: (msg: string) => void;
   expanded: boolean;
   onAutoExpand: () => void;
+  active: boolean;
 }) {
   const [input, setInput] = useState<string>(() => loadPref("json.input", ""));
   const [indent, setIndent] = useState<Indent>(() => loadPref<Indent>("json.indent", 2));
@@ -230,6 +238,7 @@ export function JsonPanel({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (!active) return;
       if (e.key.toLowerCase() === "f" && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
         e.preventDefault();
         openSearch();
@@ -285,6 +294,8 @@ export function JsonPanel({
   };
   const bytes = useMemo(() => (output ? new TextEncoder().encode(output.text).length : 0), [output]);
   const lineCount = plainLines.length;
+  // 每次出新结果时重新挂载结果区，播放淡入
+  const outKey = useMemo(() => Math.random().toString(36), [output]);
 
   // 结果较大时自动切到大窗口；同一份结果只自动展开一次，收回后不再弹
   const [autoExpand, setAutoExpand] = useState<boolean>(() => loadPref("json.autoExpand", true));
@@ -433,21 +444,19 @@ export function JsonPanel({
       <div className="json-right">
       <div className="card out">
         <div className="out-head">
-          <div className="seg small">
-            <button aria-pressed={view === "text"} onClick={() => setView("text")}>
-              文本
-            </button>
-            <button
-              aria-pressed={view === "tree"}
-              onClick={() => {
-                setView("tree");
+          <Segmented
+            small
+            ariaLabel="结果视图"
+            value={view}
+            options={VIEW_OPTIONS}
+            onChange={(v) => {
+              setView(v);
+              if (v === "tree") {
                 setInputExpanded(false);
                 if (!output && input.trim()) run("format");
-              }}
-            >
-              树形
-            </button>
-          </div>
+              }
+            }}
+          />
           <div className="dropdown" ref={indentRef}>
             <button
               className="btn link"
@@ -555,7 +564,7 @@ export function JsonPanel({
                 </button>
               </div>
             )}
-            <CodeView lines={lines} matches={matches} current={matches.length ? current : -1} flagLines={unsafeLines} gotoLine={gotoLine} />
+            <CodeView key={outKey} lines={lines} matches={matches} current={matches.length ? current : -1} flagLines={unsafeLines} gotoLine={gotoLine} />
             <div className="out-foot">
               <div className="row-between">
                 <div className={`status ${output.valid ? "ok" : "muted"}`} style={{ fontSize: 11.5 }}>

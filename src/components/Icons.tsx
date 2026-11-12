@@ -173,3 +173,10 @@ export const IconTrash = (p: P) => (
     <path d="M2.5 4.2h11M6.2 4.2V2.8h3.6v1.4M4 4.2l.7 9.3h6.6l.7-9.3M6.6 6.8v4.4M9.4 6.8v4.4" />
   </svg>
 );
+
+export const IconClock = (p: P) => (
+  <svg {...base(p, 1.5)}>
+    <circle cx="8" cy="8" r="6.2" />
+    <path d="M8 4.6V8l2.4 1.6" />
+  </svg>
+);

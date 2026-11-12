@@ -1,6 +1,6 @@
 [package]
 name = "qingkit"
-version = "0.4.0"
+version = "0.5.0"
 description = "菜单栏小工具：JSON 处理 + 局域网二维码"
 edition = "2021"
 
